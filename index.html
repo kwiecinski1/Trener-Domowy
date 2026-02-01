@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             colors: {
@@ -29,8 +30,15 @@
   }
 }
 </script>
+    <script>
+      // Polyfill for process.env to avoid ReferenceErrors and SyntaxErrors in some environments
+      window.process = window.process || { env: {} };
+      if (!window.process.env) window.process.env = {};
+      if (!window.process.env.API_KEY) window.process.env.API_KEY = '';
+    </script>
 </head>
-  <body class="bg-gray-50 text-slate-900 antialiased selection:bg-primary selection:text-white">
+  <body class="bg-gray-50 dark:bg-slate-950 text-slate-900 dark:text-slate-50 antialiased selection:bg-primary selection:text-white transition-colors duration-300">
     <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>

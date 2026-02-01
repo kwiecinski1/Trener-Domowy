@@ -1,10 +1,12 @@
+import React from 'react';
 
 export interface Exercise {
   id: string;
   name: string;
   target: string;
   description: string;
-  imageUrl: string; // Path to the webp image file
+  videoUrls: string[]; // Array of MP4 URLs. If multiple, play sequentially.
+  tip?: string; // Specific technical tip for this exercise
 }
 
 export interface WeeklyRule {
@@ -30,4 +32,14 @@ export type ViewState = 'onboarding' | 'calendar' | 'workout';
 
 export interface DailyProgress {
   [exerciseId: string]: boolean[]; // Array of completed sets
+}
+
+export interface Badge {
+  id: string;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  color: string; // Tailwind color class for bg (e.g. bg-yellow-500)
+  conditionType: 'week' | 'plank' | 'program' | 'start';
+  conditionValue?: number; // week number or seconds
 }
