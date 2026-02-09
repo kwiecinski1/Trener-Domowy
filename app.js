@@ -217,6 +217,7 @@ const state = {
   isSyncModalOpen: false,
   isSettingsOpen: false,
   settingsTab: 'program',
+  isSyncModalOpen: false,
   isAchievementsOpen: false,
   earnedBadges: [],
   plankRecord: 0,
@@ -232,6 +233,9 @@ const state = {
   syncTab: 'export',
   syncPreview: null,
   notificationInterval: null,
+  aiTip: null,
+  aiLoading: false,
+  syncTab: 'export',
   plankTimer: {
     time: 0,
     target: 30,
@@ -251,6 +255,7 @@ const state = {
       time: '18:00'
     }
   }
+  darkMode: false
 };
 
 const init = () => {
@@ -278,6 +283,8 @@ const init = () => {
     }
   }
 
+  const viewedBadgesCount = parseInt(localStorage.getItem('viewed_badges_count') || '0', 10);
+
   if (savedTheme) {
     state.darkMode = savedTheme === 'dark';
   } else {
@@ -301,6 +308,7 @@ const init = () => {
 
   if (state.startDate) {
     state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
+    state.schedule = generateSchedule(state.startDate, state.completedDays);
   }
 
   render();
@@ -335,6 +343,7 @@ const getWeeklyRule = (weekNumber) => {
 };
 
 const generateSchedule = (startDate, completedDays, settings) => {
+const generateSchedule = (startDate, completedDays) => {
   const days = [];
   const totalDays = 28;
   const start = new Date(startDate);
@@ -349,6 +358,8 @@ const generateSchedule = (startDate, completedDays, settings) => {
     const weekNumber = Math.floor(i / 7) + 1;
     const cyclePos = i % cycleLength;
     const isRestDay = cyclePos >= trainingDays;
+    const cyclePos = i % 4;
+    const isRestDay = cyclePos === 3;
     const dateString = currentDate.toISOString().split('T')[0];
 
     days.push({
@@ -502,6 +513,7 @@ const handleStartProgram = (dateStr) => {
   state.completedDays = [];
   localStorage.setItem('workout_completed_days', JSON.stringify([]));
   state.schedule = generateSchedule(date, state.completedDays, state.settings);
+  state.schedule = generateSchedule(date, state.completedDays);
   state.view = 'calendar';
   render();
 };
@@ -515,6 +527,9 @@ const handleImportData = (newDate, newCompleted) => {
   state.view = 'calendar';
   state.isSyncModalOpen = false;
   state.syncPreview = null;
+  state.schedule = generateSchedule(newDate, newCompleted);
+  state.view = 'calendar';
+  state.isSyncModalOpen = false;
   checkAchievements();
   render();
 };
@@ -532,6 +547,7 @@ const handleDaySelect = (dayIndex) => {
   const day = state.schedule[dayIndex];
   if (!day.isRestDay) {
     const rule = getWeeklyRule(day.weekNumber);
+    const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
     const initialProgress = {};
     const isDayDone = day.isCompleted;
     EXERCISES.forEach((ex) => {
@@ -553,6 +569,9 @@ const handleDaySelect = (dayIndex) => {
   state.skippedExercises = [];
   state.view = 'workout';
   state.infoExerciseId = null;
+  state.view = 'workout';
+  state.infoExerciseId = null;
+  state.aiTip = null;
   render();
   window.scrollTo(0, 0);
 };
@@ -562,6 +581,8 @@ const toggleSet = (exerciseIndex, exerciseId, setIndex) => {
   const day = state.schedule[state.selectedDayIndex];
   const rule = getWeeklyRule(day.weekNumber);
   const totalSets = getExerciseSets(exerciseId, rule);
+  const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
+  const totalSets = rule.sets;
 
   const newSets = [...(state.currentProgress[exerciseId] || [])];
   const isCompleting = !newSets[setIndex];
@@ -581,6 +602,7 @@ const toggleSet = (exerciseIndex, exerciseId, setIndex) => {
     });
 
     if (state.settings.autoRestTimer && isColumnComplete && setIndex < totalSets - 1) {
+    if (isColumnComplete && setIndex < totalSets - 1) {
       openRestTimer(rule.restTimeSec);
     }
   }
@@ -621,6 +643,7 @@ const finishWorkout = () => {
   state.view = 'calendar';
   state.selectedDayIndex = null;
   state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
+  state.schedule = generateSchedule(state.startDate, state.completedDays);
   checkAchievements();
   render();
 };
@@ -729,6 +752,9 @@ const handlePreview = () => {
     render();
   } catch (e) {
     state.syncPreview = null;
+    handleImportData(newDate, data.c);
+    alert('Dane załadowane pomyślnie!');
+  } catch (e) {
     if (error) error.textContent = 'Nieprawidłowy kod. Sprawdź czy skopiowałeś całość.';
   }
 };
@@ -878,6 +904,7 @@ const updatePlankTimerUI = () => {
     startButton.classList.add('bg-primary');
   }
 
+  if (window.lucide) window.lucide.createIcons();
 };
 
 const startPlankCountdown = () => {
@@ -934,6 +961,57 @@ const resetPlankTimer = () => {
   state.plankTimer.countdown = null;
   updatePlankTimerUI();
   renderPlankCountdown();
+};
+
+const getGeminiTip = async () => {
+  const apiKey = localStorage.getItem('gemini_api_key');
+  if (!apiKey) {
+    state.aiTip =
+      'Klucz API nie jest skonfigurowany. Dodaj go w ustawieniach Trenera AI, aby otrzymać poradę.';
+    render();
+    return;
+  }
+
+  state.aiLoading = true;
+  state.aiTip = null;
+  render();
+
+  const exerciseNames = EXERCISES.map((e) => e.name).join(', ');
+  const day = state.schedule[state.selectedDayIndex];
+  const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
+
+  const prompt = `Jesteś światowej klasy trenerem personalnym.\nDziś mój podopieczny wykonuje trening: "${rule.title}".\nLista ćwiczeń: ${exerciseNames}.\n\nPodaj JEDNĄ, krótką, motywującą i konkretną wskazówkę dotyczącą techniki jednego z tych ćwiczeń lub mentalnego nastawienia. Odpowiedź ma być krótka (maks 2 zdania) i po polsku.`;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      }
+    );
+
+    const data = await response.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    state.aiTip = text ? text.trim() : 'Nie udało się pobrać porady. Pamiętaj o nawodnieniu!';
+  } catch (error) {
+    console.error('Gemini Error:', error);
+    state.aiTip = 'Nie udało się pobrać porady. Pamiętaj o nawodnieniu!';
+  } finally {
+    state.aiLoading = false;
+    render();
+  }
+};
+
+const setApiKey = () => {
+  const key = prompt('Wprowadź klucz API Gemini:');
+  if (key) {
+    localStorage.setItem('gemini_api_key', key.trim());
+    alert('Klucz zapisany.');
+  }
 };
 
 const render = () => {
@@ -1105,6 +1183,7 @@ const renderCalendar = () => {
           const totalInWeek = 7;
           const weekProgress = (completedInWeek / totalInWeek) * 100;
           const rule = getWeeklyRule(weekNum);
+          const rule = WEEKLY_RULES.find((r) => r.weekNumber === weekNum);
 
           return `
             <div class="animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1212,6 +1291,10 @@ const renderWorkout = () => {
   const day = state.schedule[state.selectedDayIndex];
   const rule = getWeeklyRule(day.weekNumber);
   const isAllSetsCompleted = EXERCISES.every((ex) => isExerciseComplete(ex.id, rule));
+  const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
+  const isAllSetsCompleted = Object.values(state.currentProgress).every((sets) =>
+    sets.every((s) => s)
+  );
 
   return `
   <div class="min-h-screen bg-gray-50 dark:bg-slate-950 transition-colors duration-300">
@@ -1237,6 +1320,7 @@ const renderWorkout = () => {
         day.isRestDay
           ? renderRestDay()
           : `
+            ${renderGeminiAdvisor()}
             <div class="bg-white dark:bg-slate-900 rounded-xl p-5 mb-6 border border-primary/20 dark:border-primary/10 shadow-sm relative overflow-hidden transition-colors">
               <div class="absolute top-0 left-0 w-1 h-full bg-primary"></div>
               <h3 class="font-bold text-lg mb-2 flex items-center gap-2 text-gray-900 dark:text-white">
@@ -1311,6 +1395,44 @@ const renderExerciseCard = (exercise, rule, index) => {
       </div>
     `;
   }
+const renderGeminiAdvisor = () => `
+  <div class="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 text-white shadow-lg mb-6">
+    <div class="flex items-center justify-between mb-2">
+      <h4 class="font-bold flex items-center gap-2">
+        <i data-lucide="sparkles" class="text-yellow-300 w-4 h-4"></i>
+        Trener AI
+      </h4>
+      <div class="flex gap-2">
+        <button data-action="set-api-key" class="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition-colors">Ustaw klucz</button>
+        ${
+          !state.aiTip && !state.aiLoading
+            ? '<button data-action="get-tip" class="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full transition-colors">Pobierz wskazówkę</button>'
+            : ''
+        }
+      </div>
+    </div>
+    ${
+      state.aiLoading
+        ? `<div class="flex items-center gap-2 text-sm text-white/80">
+            <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
+            Generuję poradę...
+          </div>`
+        : ''
+    }
+    ${
+      state.aiTip
+        ? `<p class="text-sm text-white/90 italic border-l-2 border-yellow-300 pl-3 py-1">"${state.aiTip}"</p>`
+        : ''
+    }
+  </div>
+`;
+
+const renderExerciseCard = (exercise, rule, index) => {
+  const displayTip = exercise.tip || rule.specialInstruction;
+  const completedSets = state.currentProgress[exercise.id] || [];
+  const totalSets = rule.sets;
+  const currentVideoIndex = state.exerciseVideoIndex[exercise.id] || 0;
+  const isPlank = exercise.id === 'plank';
 
   return `
     <div class="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 overflow-hidden mb-6 group/card transition-all duration-300 hover:-translate-y-1 hover:shadow-lg" data-exercise-index="${index}">
@@ -1477,6 +1599,8 @@ const renderExerciseModal = () => {
   const exercise = EXERCISES.find((ex) => ex.id === state.infoExerciseId);
   if (!exercise) return '';
   const rule = getWeeklyRule(state.schedule[state.selectedDayIndex].weekNumber);
+  const rule = WEEKLY_RULES.find((r) => r.weekNumber === state.schedule[state.selectedDayIndex].weekNumber) ||
+    WEEKLY_RULES[0];
   const displayTip = exercise.tip || rule.specialInstruction;
 
   return `
@@ -1560,6 +1684,11 @@ const renderSyncModal = () => {
                 ${state.syncPreview ? `Start: <strong>${state.syncPreview.startDate}</strong> • Ukończone dni: <strong>${state.syncPreview.completedCount}</strong>` : 'Brak podglądu — kliknij „Podgląd danych”.'}
               </div>
               <p id="import-error" class="text-red-500 dark:text-red-400 text-xs mb-4"></p>
+              <p id="import-error" class="text-red-500 dark:text-red-400 text-xs mb-4"></p>
+              <button data-action="import-sync" class="w-full bg-primary hover:bg-sky-600 text-white py-3 rounded-lg font-bold shadow-md transition-colors flex items-center justify-center gap-2">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                Załaduj Dane
+              </button>
             `
         }
       </div>
@@ -1789,6 +1918,8 @@ root.addEventListener('click', (event) => {
     if (event.target.closest('[data-stop-prop]')) {
       return;
     }
+  if (target.closest('[data-stop-prop]')) {
+    event.stopPropagation();
   }
 
   switch (action) {
@@ -1906,6 +2037,11 @@ root.addEventListener('click', (event) => {
         state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
       }
       render();
+    case 'get-tip':
+      getGeminiTip();
+      break;
+    case 'set-api-key':
+      setApiKey();
       break;
     case 'plank-start':
       if (state.plankTimer.running) {
