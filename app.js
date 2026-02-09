@@ -212,6 +212,11 @@ const state = {
   completedDays: [],
   selectedDayIndex: null,
   currentProgress: {},
+  exerciseOverrides: {},
+  skippedExercises: [],
+  isSyncModalOpen: false,
+  isSettingsOpen: false,
+  settingsTab: 'program',
   isSyncModalOpen: false,
   isAchievementsOpen: false,
   earnedBadges: [],
@@ -225,6 +230,9 @@ const state = {
   restInterval: null,
   infoExerciseId: null,
   exerciseVideoIndex: {},
+  syncTab: 'export',
+  syncPreview: null,
+  notificationInterval: null,
   aiTip: null,
   aiLoading: false,
   syncTab: 'export',
@@ -236,6 +244,17 @@ const state = {
     countdownInterval: null,
     interval: null
   },
+  darkMode: false,
+  settings: {
+    trainingDays: 3,
+    restDays: 1,
+    autoRestTimer: true,
+    weeklyOverrides: {},
+    notifications: {
+      enabled: false,
+      time: '18:00'
+    }
+  }
   darkMode: false
 };
 
@@ -245,6 +264,25 @@ const init = () => {
   const savedBadges = localStorage.getItem('earned_badges');
   const savedPlankRecord = localStorage.getItem('plank_record');
   const savedTheme = localStorage.getItem('theme');
+  const savedSettings = localStorage.getItem('app_settings');
+  const viewedBadgesCount = parseInt(localStorage.getItem('viewed_badges_count') || '0', 10);
+
+  if (savedSettings) {
+    try {
+      const parsed = JSON.parse(savedSettings);
+      state.settings = {
+        ...state.settings,
+        ...parsed,
+        notifications: {
+          ...state.settings.notifications,
+          ...(parsed.notifications || {})
+        }
+      };
+    } catch (e) {
+      console.warn('Failed to parse settings', e);
+    }
+  }
+
   const viewedBadgesCount = parseInt(localStorage.getItem('viewed_badges_count') || '0', 10);
 
   if (savedTheme) {
@@ -269,6 +307,7 @@ const init = () => {
   }
 
   if (state.startDate) {
+    state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
     state.schedule = generateSchedule(state.startDate, state.completedDays);
   }
 
@@ -279,6 +318,10 @@ const init = () => {
       navigator.serviceWorker.register('./service-worker.js');
     });
   }
+
+  if (state.settings.notifications.enabled) {
+    scheduleReminders();
+  }
 };
 
 const applyTheme = () => {
@@ -286,16 +329,35 @@ const applyTheme = () => {
   localStorage.setItem('theme', state.darkMode ? 'dark' : 'light');
 };
 
+const saveSettings = () => {
+  localStorage.setItem('app_settings', JSON.stringify(state.settings));
+};
+
+const getWeeklyRule = (weekNumber) => {
+  const base = WEEKLY_RULES.find((r) => r.weekNumber === weekNumber) || WEEKLY_RULES[0];
+  const override = state.settings.weeklyOverrides[weekNumber] || {};
+  return {
+    ...base,
+    ...override
+  };
+};
+
+const generateSchedule = (startDate, completedDays, settings) => {
 const generateSchedule = (startDate, completedDays) => {
   const days = [];
   const totalDays = 28;
   const start = new Date(startDate);
   start.setHours(0, 0, 0, 0);
+  const trainingDays = Math.max(1, Number(settings.trainingDays) || 3);
+  const restDays = Math.max(1, Number(settings.restDays) || 1);
+  const cycleLength = trainingDays + restDays;
 
   for (let i = 0; i < totalDays; i += 1) {
     const currentDate = new Date(start);
     currentDate.setDate(start.getDate() + i);
     const weekNumber = Math.floor(i / 7) + 1;
+    const cyclePos = i % cycleLength;
+    const isRestDay = cyclePos >= trainingDays;
     const cyclePos = i % 4;
     const isRestDay = cyclePos === 3;
     const dateString = currentDate.toISOString().split('T')[0];
@@ -322,6 +384,45 @@ const isToday = (date) => {
     date.getMonth() === today.getMonth() &&
     date.getFullYear() === today.getFullYear()
   );
+};
+
+const getStats = () => {
+  const completedSet = new Set(state.completedDays);
+  const sortedSchedule = [...state.schedule].sort((a, b) => a.date - b.date);
+  const totalCompleted = state.completedDays.length;
+  const workoutsCompleted = sortedSchedule.filter((d) => d.isCompleted && !d.isRestDay).length;
+  const restCompleted = sortedSchedule.filter((d) => d.isCompleted && d.isRestDay).length;
+
+  let currentStreak = 0;
+  for (let i = sortedSchedule.length - 1; i >= 0; i -= 1) {
+    const day = sortedSchedule[i];
+    const key = day.date.toISOString().split('T')[0];
+    if (completedSet.has(key)) {
+      currentStreak += 1;
+    } else if (currentStreak > 0) {
+      break;
+    }
+  }
+
+  let longestStreak = 0;
+  let tempStreak = 0;
+  sortedSchedule.forEach((day) => {
+    const key = day.date.toISOString().split('T')[0];
+    if (completedSet.has(key)) {
+      tempStreak += 1;
+      longestStreak = Math.max(longestStreak, tempStreak);
+    } else {
+      tempStreak = 0;
+    }
+  });
+
+  return {
+    totalCompleted,
+    workoutsCompleted,
+    restCompleted,
+    currentStreak,
+    longestStreak
+  };
 };
 
 const showToast = (title) => {
@@ -411,6 +512,7 @@ const handleStartProgram = (dateStr) => {
   localStorage.setItem('workout_start_date', date.toISOString());
   state.completedDays = [];
   localStorage.setItem('workout_completed_days', JSON.stringify([]));
+  state.schedule = generateSchedule(date, state.completedDays, state.settings);
   state.schedule = generateSchedule(date, state.completedDays);
   state.view = 'calendar';
   render();
@@ -421,6 +523,10 @@ const handleImportData = (newDate, newCompleted) => {
   state.completedDays = newCompleted;
   localStorage.setItem('workout_start_date', newDate.toISOString());
   localStorage.setItem('workout_completed_days', JSON.stringify(newCompleted));
+  state.schedule = generateSchedule(newDate, newCompleted, state.settings);
+  state.view = 'calendar';
+  state.isSyncModalOpen = false;
+  state.syncPreview = null;
   state.schedule = generateSchedule(newDate, newCompleted);
   state.view = 'calendar';
   state.isSyncModalOpen = false;
@@ -440,6 +546,7 @@ const handleDaySelect = (dayIndex) => {
   state.selectedDayIndex = dayIndex;
   const day = state.schedule[dayIndex];
   if (!day.isRestDay) {
+    const rule = getWeeklyRule(day.weekNumber);
     const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
     const initialProgress = {};
     const isDayDone = day.isCompleted;
@@ -458,6 +565,10 @@ const handleDaySelect = (dayIndex) => {
     countdownInterval: null,
     interval: null
   };
+  state.exerciseOverrides = {};
+  state.skippedExercises = [];
+  state.view = 'workout';
+  state.infoExerciseId = null;
   state.view = 'workout';
   state.infoExerciseId = null;
   state.aiTip = null;
@@ -468,6 +579,8 @@ const handleDaySelect = (dayIndex) => {
 const toggleSet = (exerciseIndex, exerciseId, setIndex) => {
   if (state.selectedDayIndex === null) return;
   const day = state.schedule[state.selectedDayIndex];
+  const rule = getWeeklyRule(day.weekNumber);
+  const totalSets = getExerciseSets(exerciseId, rule);
   const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
   const totalSets = rule.sets;
 
@@ -481,10 +594,14 @@ const toggleSet = (exerciseIndex, exerciseId, setIndex) => {
     state.pendingScrollTo = nextIndex;
 
     const isColumnComplete = EXERCISES.every((ex) => {
+      if (isExerciseSkipped(ex.id)) return true;
+      const exTotal = getExerciseSets(ex.id, rule);
+      if (setIndex >= exTotal) return true;
       if (ex.id === exerciseId) return newSets[setIndex];
       return state.currentProgress[ex.id]?.[setIndex];
     });
 
+    if (state.settings.autoRestTimer && isColumnComplete && setIndex < totalSets - 1) {
     if (isColumnComplete && setIndex < totalSets - 1) {
       openRestTimer(rule.restTimeSec);
     }
@@ -525,6 +642,7 @@ const finishWorkout = () => {
 
   state.view = 'calendar';
   state.selectedDayIndex = null;
+  state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
   state.schedule = generateSchedule(state.startDate, state.completedDays);
   checkAchievements();
   render();
@@ -588,6 +706,30 @@ const handleImport = () => {
       if (error) error.textContent = 'Wklej kod przed załadowaniem.';
       return;
     }
+    if (!state.syncPreview) {
+      if (error) error.textContent = 'Najpierw wykonaj podgląd danych.';
+      return;
+    }
+
+    handleImportData(state.syncPreview.date, state.syncPreview.completed);
+    state.syncPreview = null;
+    alert('Dane załadowane pomyślnie!');
+  } catch (e) {
+    if (error) error.textContent = 'Nieprawidłowy kod. Sprawdź czy skopiowałeś całość.';
+  }
+};
+
+const handlePreview = () => {
+  const textarea = document.querySelector('#import-code');
+  const error = document.querySelector('#import-error');
+  if (!textarea) return;
+  if (error) error.textContent = '';
+
+  try {
+    if (!textarea.value.trim()) {
+      if (error) error.textContent = 'Wklej kod przed podglądem.';
+      return;
+    }
 
     const jsonString = atob(textarea.value.trim());
     const data = JSON.parse(jsonString);
@@ -601,6 +743,15 @@ const handleImport = () => {
       throw new Error('Nieprawidłowa data');
     }
 
+    state.syncPreview = {
+      date: newDate,
+      startDate: newDate.toISOString().split('T')[0],
+      completedCount: data.c.length,
+      completed: data.c
+    };
+    render();
+  } catch (e) {
+    state.syncPreview = null;
     handleImportData(newDate, data.c);
     alert('Dane załadowane pomyślnie!');
   } catch (e) {
@@ -676,6 +827,54 @@ const playSuccessSound = () => {
   } catch (e) {
     console.error('Audio playback failed', e);
   }
+};
+
+const scheduleReminders = () => {
+  if (state.notificationInterval) {
+    clearInterval(state.notificationInterval);
+    state.notificationInterval = null;
+  }
+  if (!state.settings.notifications.enabled) return;
+
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+
+  state.notificationInterval = setInterval(() => {
+    if (!state.settings.notifications.enabled) return;
+    const [hourStr, minStr] = state.settings.notifications.time.split(':');
+    const hour = Number(hourStr);
+    const minute = Number(minStr);
+    const now = new Date();
+    if (now.getHours() !== hour || now.getMinutes() !== minute) return;
+    const lastKey = 'last_reminder_date';
+    const today = now.toISOString().split('T')[0];
+    if (localStorage.getItem(lastKey) === today) return;
+    localStorage.setItem(lastKey, today);
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('Czas na trening!', {
+        body: 'Otwórz Trenera Domowego i zrób plan na dziś.',
+        icon: './icons/icon-192.svg'
+      });
+    } else {
+      alert('Czas na trening!');
+    }
+  }, 30000);
+};
+
+const getExerciseSets = (exerciseId, rule) => {
+  const override = state.exerciseOverrides[exerciseId];
+  return override?.sets || rule.sets;
+};
+
+const isExerciseSkipped = (exerciseId) => state.skippedExercises.includes(exerciseId);
+
+const isExerciseComplete = (exerciseId, rule) => {
+  if (isExerciseSkipped(exerciseId)) return true;
+  const totalSets = getExerciseSets(exerciseId, rule);
+  const progress = state.currentProgress[exerciseId] || [];
+  if (progress.length < totalSets) return false;
+  return progress.slice(0, totalSets).every(Boolean);
 };
 
 const updatePlankTimerUI = () => {
@@ -907,6 +1106,7 @@ const renderCalendar = () => {
   const progressPercent = Math.round((completedCount / 28) * 100);
   const activeDay = state.schedule.find((d) => !d.isCompleted);
   const activeDayIndex = activeDay ? activeDay.dayIndex : state.schedule.length;
+  const stats = getStats();
 
   const weeks = [];
   for (let i = 0; i < state.schedule.length; i += 7) {
@@ -916,6 +1116,7 @@ const renderCalendar = () => {
   return `
   <div class="min-h-screen bg-gray-50 dark:bg-slate-950 pb-10 transition-colors duration-300 relative">
     ${state.isSyncModalOpen ? renderSyncModal() : ''}
+    ${state.isSettingsOpen ? renderSettingsModal() : ''}
     ${state.isAchievementsOpen ? renderAchievementsModal() : ''}
     ${state.showNewBadgeToast ? renderToast() : ''}
 
@@ -939,6 +1140,9 @@ const renderCalendar = () => {
         <button data-action="toggle-theme" class="text-gray-500 hover:text-primary dark:text-gray-400 dark:hover:text-yellow-300 transition-colors p-2">
           <i data-lucide="${state.darkMode ? 'sun' : 'moon'}" class="w-6 h-6"></i>
         </button>
+        <button data-action="open-settings" class="text-gray-500 hover:text-primary dark:text-gray-400 transition-colors p-2" title="Ustawienia">
+          <i data-lucide="sliders-horizontal" class="w-6 h-6"></i>
+        </button>
         <button data-action="open-sync" class="text-gray-500 hover:text-primary dark:text-gray-400 transition-colors p-2" title="Synchronizuj dane">
           <i data-lucide="cloud" class="w-6 h-6"></i>
         </button>
@@ -947,12 +1151,38 @@ const renderCalendar = () => {
     </header>
 
     <div class="max-w-3xl mx-auto p-4 space-y-8">
+      <div class="bg-white dark:bg-slate-900 rounded-xl p-5 border border-gray-100 dark:border-slate-800 shadow-sm">
+        <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-3">Statystyki</h3>
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+          <div class="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
+            <p class="text-xs text-gray-500 dark:text-slate-400">Ukończone dni</p>
+            <p class="text-xl font-bold text-gray-900 dark:text-white">${stats.totalCompleted}</p>
+          </div>
+          <div class="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
+            <p class="text-xs text-gray-500 dark:text-slate-400">Treningi</p>
+            <p class="text-xl font-bold text-gray-900 dark:text-white">${stats.workoutsCompleted}</p>
+          </div>
+          <div class="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
+            <p class="text-xs text-gray-500 dark:text-slate-400">Regeneracje</p>
+            <p class="text-xl font-bold text-gray-900 dark:text-white">${stats.restCompleted}</p>
+          </div>
+          <div class="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
+            <p class="text-xs text-gray-500 dark:text-slate-400">Aktualny streak</p>
+            <p class="text-xl font-bold text-gray-900 dark:text-white">${stats.currentStreak}</p>
+          </div>
+          <div class="bg-slate-50 dark:bg-slate-800 rounded-lg p-3">
+            <p class="text-xs text-gray-500 dark:text-slate-400">Najdłuższy streak</p>
+            <p class="text-xl font-bold text-gray-900 dark:text-white">${stats.longestStreak}</p>
+          </div>
+        </div>
+      </div>
       ${weeks
         .map((weekDays, weekIndex) => {
           const weekNum = weekIndex + 1;
           const completedInWeek = weekDays.filter((d) => d.isCompleted).length;
           const totalInWeek = 7;
           const weekProgress = (completedInWeek / totalInWeek) * 100;
+          const rule = getWeeklyRule(weekNum);
           const rule = WEEKLY_RULES.find((r) => r.weekNumber === weekNum);
 
           return `
@@ -1059,6 +1289,8 @@ const renderCalendar = () => {
 
 const renderWorkout = () => {
   const day = state.schedule[state.selectedDayIndex];
+  const rule = getWeeklyRule(day.weekNumber);
+  const isAllSetsCompleted = EXERCISES.every((ex) => isExerciseComplete(ex.id, rule));
   const rule = WEEKLY_RULES.find((r) => r.weekNumber === day.weekNumber) || WEEKLY_RULES[0];
   const isAllSetsCompleted = Object.values(state.currentProgress).every((sets) =>
     sets.every((s) => s)
@@ -1144,6 +1376,25 @@ const renderRestDay = () => `
   </div>
 `;
 
+const renderExerciseCard = (exercise, rule, index) => {
+  const displayTip = exercise.tip || rule.specialInstruction;
+  const completedSets = state.currentProgress[exercise.id] || [];
+  const totalSets = getExerciseSets(exercise.id, rule);
+  const currentVideoIndex = state.exerciseVideoIndex[exercise.id] || 0;
+  const isPlank = exercise.id === 'plank';
+  const isSkipped = isExerciseSkipped(exercise.id);
+
+  if (isSkipped) {
+    return `
+      <div class="bg-slate-50 dark:bg-slate-900 rounded-xl border border-dashed border-gray-200 dark:border-slate-800 p-5 mb-6 flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-bold text-gray-700 dark:text-slate-200">${exercise.name}</h3>
+          <p class="text-xs text-gray-500 dark:text-slate-400">Ćwiczenie pominięte w tym treningu.</p>
+        </div>
+        <button data-action="toggle-skip" data-exercise-id="${exercise.id}" class="text-sm text-primary hover:text-sky-600 font-semibold">Przywróć</button>
+      </div>
+    `;
+  }
 const renderGeminiAdvisor = () => `
   <div class="bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl p-4 text-white shadow-lg mb-6">
     <div class="flex items-center justify-between mb-2">
@@ -1228,6 +1479,19 @@ const renderExerciseCard = (exercise, rule, index) => {
           <button data-action="open-info" data-exercise-id="${exercise.id}" class="ml-2 text-primary hover:text-sky-700 dark:hover:text-sky-400 transition-colors p-1" title="Pełny opis">
             <i data-lucide="info" class="w-5 h-5"></i>
           </button>
+        </div>
+        <div class="flex flex-wrap items-center gap-3 mb-4 text-xs text-gray-500 dark:text-slate-400">
+          <label class="flex items-center gap-2">
+            Serie
+            <select data-action="set-override" data-exercise-id="${exercise.id}" class="bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded px-2 py-1 text-gray-700 dark:text-slate-200">
+              ${[1, 2, 3, 4, 5, 6]
+                .map(
+                  (value) => `<option value="${value}" ${value === totalSets ? 'selected' : ''}>${value}</option>`
+                )
+                .join('')}
+            </select>
+          </label>
+          <button data-action="toggle-skip" data-exercise-id="${exercise.id}" class="text-red-500 hover:text-red-600 font-semibold">Pomiń dziś</button>
         </div>
         ${
           displayTip
@@ -1334,6 +1598,7 @@ const renderPlankTimer = () => `
 const renderExerciseModal = () => {
   const exercise = EXERCISES.find((ex) => ex.id === state.infoExerciseId);
   if (!exercise) return '';
+  const rule = getWeeklyRule(state.schedule[state.selectedDayIndex].weekNumber);
   const rule = WEEKLY_RULES.find((r) => r.weekNumber === state.schedule[state.selectedDayIndex].weekNumber) ||
     WEEKLY_RULES[0];
   const displayTip = exercise.tip || rule.specialInstruction;
@@ -1409,6 +1674,16 @@ const renderSyncModal = () => {
             : `
               <p class="text-sm text-gray-600 dark:text-slate-400 mb-3">Wklej kod wygenerowany na innym urządzeniu.<br/><span class="text-red-500 dark:text-red-400 text-xs font-bold">Uwaga: To nadpisze obecny postęp na tym urządzeniu!</span></p>
               <textarea id="import-code" placeholder="Wklej kod tutaj..." class="w-full h-32 p-3 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-xs font-mono text-gray-900 dark:text-white resize-none focus:ring-2 focus:ring-primary focus:border-primary outline-none mb-4"></textarea>
+              <div class="flex gap-2 mb-3">
+                <button data-action="preview-sync" class="flex-1 bg-slate-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200 py-2 rounded-lg text-sm font-semibold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">Podgląd danych</button>
+                <button data-action="import-sync" ${state.syncPreview ? '' : 'disabled'} class="flex-1 bg-primary hover:bg-sky-600 text-white py-2 rounded-lg text-sm font-semibold shadow-md transition-colors disabled:opacity-50">
+                  Załaduj dane
+                </button>
+              </div>
+              <div class="text-xs text-gray-500 dark:text-slate-400 mb-3">
+                ${state.syncPreview ? `Start: <strong>${state.syncPreview.startDate}</strong> • Ukończone dni: <strong>${state.syncPreview.completedCount}</strong>` : 'Brak podglądu — kliknij „Podgląd danych”.'}
+              </div>
+              <p id="import-error" class="text-red-500 dark:text-red-400 text-xs mb-4"></p>
               <p id="import-error" class="text-red-500 dark:text-red-400 text-xs mb-4"></p>
               <button data-action="import-sync" class="w-full bg-primary hover:bg-sky-600 text-white py-3 rounded-lg font-bold shadow-md transition-colors flex items-center justify-center gap-2">
                 <i data-lucide="download" class="w-4 h-4"></i>
@@ -1420,6 +1695,107 @@ const renderSyncModal = () => {
     </div>
   `;
 };
+
+const renderSettingsModal = () => `
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" data-action="close-settings">
+    <div class="bg-white dark:bg-slate-900 rounded-2xl p-6 max-w-3xl w-full shadow-2xl relative border border-gray-100 dark:border-slate-800 max-h-[90vh] overflow-y-auto" data-stop-prop>
+      <button data-action="close-settings" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 rounded-full hover:bg-gray-100 dark:hover:bg-slate-800 transition-colors">
+        <i data-lucide="x" class="w-6 h-6"></i>
+      </button>
+      <h3 class="text-2xl font-bold mb-6 text-gray-900 dark:text-white">Ustawienia</h3>
+      <div class="flex border-b border-gray-200 dark:border-slate-800 mb-6">
+        <button data-action="settings-tab" data-tab="program" class="flex-1 pb-3 font-medium text-sm transition-colors ${
+          state.settingsTab === 'program'
+            ? 'text-primary border-b-2 border-primary'
+            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+        }">Program</button>
+        <button data-action="settings-tab" data-tab="notifications" class="flex-1 pb-3 font-medium text-sm transition-colors ${
+          state.settingsTab === 'notifications'
+            ? 'text-primary border-b-2 border-primary'
+            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'
+        }">Powiadomienia</button>
+      </div>
+
+      ${
+        state.settingsTab === 'program'
+          ? `
+        <div class="space-y-6">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <label class="text-sm text-gray-600 dark:text-slate-300">
+              Dni treningowe w cyklu
+              <input data-setting="trainingDays" type="number" min="1" max="6" value="${state.settings.trainingDays}" class="mt-2 w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+            </label>
+            <label class="text-sm text-gray-600 dark:text-slate-300">
+              Dni regeneracji w cyklu
+              <input data-setting="restDays" type="number" min="1" max="3" value="${state.settings.restDays}" class="mt-2 w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+            </label>
+            <label class="text-sm text-gray-600 dark:text-slate-300 flex items-center gap-2">
+              <input data-setting="autoRestTimer" type="checkbox" ${state.settings.autoRestTimer ? 'checked' : ''} class="accent-primary"/>
+              Automatyczny timer przerwy
+            </label>
+          </div>
+
+          <div class="space-y-4">
+            <h4 class="text-lg font-bold text-gray-900 dark:text-white">Tygodniowe reguły</h4>
+            ${[1, 2, 3, 4]
+              .map((week) => {
+                const rule = getWeeklyRule(week);
+                return `
+                  <div class="border border-gray-100 dark:border-slate-800 rounded-xl p-4">
+                    <h5 class="font-semibold text-gray-800 dark:text-white mb-3">Tydzień ${week}</h5>
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <label class="text-xs text-gray-500 dark:text-slate-400">
+                        Serie
+                        <input data-week="${week}" data-field="sets" type="number" min="1" max="6" value="${rule.sets}" class="mt-1 w-full px-2 py-1 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+                      </label>
+                      <label class="text-xs text-gray-500 dark:text-slate-400">
+                        Przerwa (sek)
+                        <input data-week="${week}" data-field="restTimeSec" type="number" min="30" max="300" value="${rule.restTimeSec}" class="mt-1 w-full px-2 py-1 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+                      </label>
+                      <label class="text-xs text-gray-500 dark:text-slate-400">
+                        Powtórzenia
+                        <input data-week="${week}" data-field="repsLabel" type="text" value="${rule.repsLabel}" class="mt-1 w-full px-2 py-1 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+                      </label>
+                      <label class="text-xs text-gray-500 dark:text-slate-400">
+                        Plank
+                        <input data-week="${week}" data-field="plankLabel" type="text" value="${rule.plankLabel}" class="mt-1 w-full px-2 py-1 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+                      </label>
+                      <label class="text-xs text-gray-500 dark:text-slate-400 sm:col-span-2">
+                        Instrukcja
+                        <input data-week="${week}" data-field="specialInstruction" type="text" value="${rule.specialInstruction}" class="mt-1 w-full px-2 py-1 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+                      </label>
+                    </div>
+                  </div>
+                `;
+              })
+              .join('')}
+          </div>
+          <div class="flex justify-end">
+            <button data-action="reset-settings" class="text-sm text-red-500 hover:text-red-600">Resetuj ustawienia</button>
+          </div>
+        </div>
+      `
+          : `
+        <div class="space-y-4">
+          <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-slate-300">
+            <input data-setting="notifications.enabled" type="checkbox" ${
+              state.settings.notifications.enabled ? 'checked' : ''
+            } class="accent-primary"/>
+            Włącz przypomnienia
+          </label>
+          <label class="text-sm text-gray-600 dark:text-slate-300">
+            Godzina przypomnienia
+            <input data-setting="notifications.time" type="time" value="${state.settings.notifications.time}" class="mt-2 w-full max-w-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-900 dark:text-white"/>
+          </label>
+          <p class="text-xs text-gray-500 dark:text-slate-400">
+            Aplikacja poprosi o zgodę na powiadomienia. Przypomnienia są realizowane lokalnie.
+          </p>
+        </div>
+      `
+      }
+    </div>
+  </div>
+`;
 
 const renderAchievementsModal = () => {
   const earnedCount = state.earnedBadges.length;
@@ -1538,6 +1914,10 @@ root.addEventListener('click', (event) => {
   if (!target) return;
   const action = target.dataset.action;
 
+  if (action.startsWith('close-') && !target.closest('[data-stop-prop]')) {
+    if (event.target.closest('[data-stop-prop]')) {
+      return;
+    }
   if (target.closest('[data-stop-prop]')) {
     event.stopPropagation();
   }
@@ -1550,10 +1930,24 @@ root.addEventListener('click', (event) => {
       break;
     case 'open-sync':
       state.isSyncModalOpen = true;
+      state.syncPreview = null;
+      render();
+      break;
+    case 'open-settings':
+      state.isSettingsOpen = true;
       render();
       break;
     case 'close-sync':
       state.isSyncModalOpen = false;
+      state.syncPreview = null;
+      render();
+      break;
+    case 'close-settings':
+      state.isSettingsOpen = false;
+      render();
+      break;
+    case 'settings-tab':
+      state.settingsTab = target.dataset.tab;
       render();
       break;
     case 'sync-tab':
@@ -1562,6 +1956,9 @@ root.addEventListener('click', (event) => {
       break;
     case 'copy-sync':
       handleCopy();
+      break;
+    case 'preview-sync':
+      handlePreview();
       break;
     case 'import-sync':
       handleImport();
@@ -1602,6 +1999,17 @@ root.addEventListener('click', (event) => {
     case 'complete-all':
       completeAllSets(target.dataset.exerciseId, Number(target.dataset.sets));
       break;
+    case 'toggle-skip':
+      {
+        const exerciseId = target.dataset.exerciseId;
+        if (isExerciseSkipped(exerciseId)) {
+          state.skippedExercises = state.skippedExercises.filter((id) => id !== exerciseId);
+        } else {
+          state.skippedExercises = [...state.skippedExercises, exerciseId];
+        }
+        render();
+      }
+      break;
     case 'finish-workout':
       finishWorkout();
       break;
@@ -1612,6 +2020,23 @@ root.addEventListener('click', (event) => {
       state.restTimeLeft += 30;
       updateRestTimerUI();
       break;
+    case 'reset-settings':
+      state.settings = {
+        trainingDays: 3,
+        restDays: 1,
+        autoRestTimer: true,
+        weeklyOverrides: {},
+        notifications: {
+          enabled: false,
+          time: '18:00'
+        }
+      };
+      saveSettings();
+      scheduleReminders();
+      if (state.startDate) {
+        state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
+      }
+      render();
     case 'get-tip':
       getGeminiTip();
       break;
@@ -1638,6 +2063,49 @@ root.addEventListener('change', (event) => {
   if (target.matches('[data-action="start-program"]')) {
     handleStartProgram(target.value);
   }
+  if (target.matches('[data-action="set-override"]')) {
+    const exerciseId = target.dataset.exerciseId;
+    const newSets = Number(target.value);
+    state.exerciseOverrides[exerciseId] = { sets: newSets };
+    const prev = state.currentProgress[exerciseId] || [];
+    if (prev.length < newSets) {
+      state.currentProgress[exerciseId] = [...prev, ...new Array(newSets - prev.length).fill(false)];
+    } else {
+      state.currentProgress[exerciseId] = prev.slice(0, newSets);
+    }
+    render();
+  }
+  if (target.matches('[data-setting]')) {
+    const key = target.dataset.setting;
+    if (key === 'autoRestTimer') {
+      state.settings.autoRestTimer = target.checked;
+    } else if (key === 'notifications.enabled') {
+      state.settings.notifications.enabled = target.checked;
+    } else if (key === 'notifications.time') {
+      state.settings.notifications.time = target.value;
+    } else if (key === 'trainingDays') {
+      state.settings.trainingDays = Number(target.value);
+    } else if (key === 'restDays') {
+      state.settings.restDays = Number(target.value);
+    }
+    saveSettings();
+    if (state.startDate) {
+      state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
+    }
+    scheduleReminders();
+    render();
+  }
+  if (target.matches('[data-week]')) {
+    const week = Number(target.dataset.week);
+    const field = target.dataset.field;
+    const value = target.value;
+    state.settings.weeklyOverrides[week] = {
+      ...(state.settings.weeklyOverrides[week] || {}),
+      [field]: field === 'sets' || field === 'restTimeSec' ? Number(value) : value
+    };
+    saveSettings();
+    render();
+  }
 });
 
 root.addEventListener('input', (event) => {
@@ -1645,6 +2113,9 @@ root.addEventListener('input', (event) => {
   if (target.matches('[data-action="plank-target"]')) {
     state.plankTimer.target = Number(target.value);
     updatePlankTimerUI();
+  }
+  if (target.id === 'import-code') {
+    state.syncPreview = null;
   }
 });
 

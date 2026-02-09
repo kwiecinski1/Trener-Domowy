@@ -14,7 +14,3 @@ Aplikacja treningowa w pełni oparta o HTML, CSS i JavaScript. Działa offline j
 
 - Po uruchomieniu aplikacji w przeglądarce możesz ją zainstalować z poziomu menu przeglądarki ("Zainstaluj aplikację").
 - Service worker zapisuje zasoby lokalnie, więc aplikacja działa offline.
-
-## Trener AI
-
-Jeśli chcesz korzystać z podpowiedzi AI, kliknij „Ustaw klucz” w sekcji Trener AI i wprowadź swój klucz API Gemini.
