@@ -1,20 +1,16 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Trener Domowy 3000 (HTML/CSS/JS + PWA)
 
-# Run and deploy your AI Studio app
+Aplikacja treningowa w pełni oparta o HTML, CSS i JavaScript. Działa offline jako Progressive Web App.
 
-This contains everything you need to run your app locally.
+## Uruchomienie lokalne
 
-View your app in AI Studio: https://ai.studio/apps/drive/1gnlB0N3TFRWExfT_VBzNrxe48xNGiNq6
+1. (Opcjonalnie) Uruchom prosty serwer statyczny:
+   ```bash
+   python3 -m http.server 5173
+   ```
+2. Otwórz `http://localhost:5173` w przeglądarce.
 
-## Run Locally
+## Używanie jako PWA
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+- Po uruchomieniu aplikacji w przeglądarce możesz ją zainstalować z poziomu menu przeglądarki ("Zainstaluj aplikację").
+- Service worker zapisuje zasoby lokalnie, więc aplikacja działa offline.
