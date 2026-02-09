@@ -261,7 +261,7 @@ const init = () => {
   const savedPlankRecord = localStorage.getItem('plank_record');
   const savedTheme = localStorage.getItem('theme');
   const savedSettings = localStorage.getItem('app_settings');
-  const viewedBadgesCount = parseInt(localStorage.getItem('viewed_badges_count') || '0', 10);
+  const achievementsOpened = localStorage.getItem('achievements_opened') === 'true';
 
   if (savedSettings) {
     try {
@@ -292,13 +292,12 @@ const init = () => {
     state.completedDays = savedCompleted ? JSON.parse(savedCompleted) : [];
     if (savedBadges) {
       state.earnedBadges = JSON.parse(savedBadges);
-      if (state.earnedBadges.length > viewedBadgesCount) {
-        state.hasUnseenBadges = true;
-      }
     }
     if (savedPlankRecord) state.plankRecord = Number(savedPlankRecord);
     state.view = 'calendar';
   }
+
+  state.hasUnseenBadges = !achievementsOpened;
 
   if (state.startDate) {
     state.schedule = generateSchedule(state.startDate, state.completedDays, state.settings);
@@ -491,7 +490,6 @@ const checkAchievements = () => {
   if (badgesChanged) {
     state.earnedBadges = Array.from(newEarned);
     localStorage.setItem('earned_badges', JSON.stringify(state.earnedBadges));
-    state.hasUnseenBadges = true;
   }
 };
 
@@ -503,15 +501,21 @@ const handleStartProgram = (dateStr) => {
   state.completedDays = [];
   localStorage.setItem('workout_completed_days', JSON.stringify([]));
   state.schedule = generateSchedule(date, state.completedDays, state.settings);
+  state.hasUnseenBadges = localStorage.getItem('achievements_opened') !== 'true';
   state.view = 'calendar';
   render();
 };
 
-const handleImportData = (newDate, newCompleted) => {
+const handleImportData = (newDate, newCompleted, newPlankRecord) => {
+  const parsedPlankRecord = Number.isFinite(Number(newPlankRecord))
+    ? Number(newPlankRecord)
+    : state.plankRecord;
   state.startDate = newDate;
   state.completedDays = newCompleted;
+  state.plankRecord = parsedPlankRecord;
   localStorage.setItem('workout_start_date', newDate.toISOString());
   localStorage.setItem('workout_completed_days', JSON.stringify(newCompleted));
+  localStorage.setItem('plank_record', parsedPlankRecord.toString());
   state.schedule = generateSchedule(newDate, newCompleted, state.settings);
   state.view = 'calendar';
   state.isSyncModalOpen = false;
@@ -608,7 +612,6 @@ const finishWorkout = () => {
     if (currentHour >= 20 && !state.earnedBadges.includes('night_owl')) {
       state.earnedBadges = [...state.earnedBadges, 'night_owl'];
       localStorage.setItem('earned_badges', JSON.stringify(state.earnedBadges));
-      state.hasUnseenBadges = true;
       showToast('Nocny Marek');
     }
 
@@ -643,13 +646,13 @@ const resetProgram = () => {
 const openAchievements = () => {
   state.isAchievementsOpen = true;
   state.hasUnseenBadges = false;
-  localStorage.setItem('viewed_badges_count', state.earnedBadges.length.toString());
+  localStorage.setItem('achievements_opened', 'true');
   render();
 };
 
 const generateExportCode = () => {
   if (!state.startDate) return '';
-  const data = { s: state.startDate.toISOString(), c: state.completedDays };
+  const data = { s: state.startDate.toISOString(), c: state.completedDays, p: state.plankRecord };
   try {
     return btoa(JSON.stringify(data));
   } catch (e) {
@@ -684,7 +687,11 @@ const handleImport = () => {
       return;
     }
 
-    handleImportData(state.syncPreview.date, state.syncPreview.completed);
+    handleImportData(
+      state.syncPreview.date,
+      state.syncPreview.completed,
+      state.syncPreview.plankRecord
+    );
     state.syncPreview = null;
     state.importCode = '';
     alert('Dane załadowane pomyślnie!');
@@ -715,11 +722,14 @@ const handlePreview = () => {
       throw new Error('Nieprawidłowa data');
     }
 
+    const parsedPlankRecord = Number.isFinite(Number(data.p)) ? Number(data.p) : 0;
+
     state.syncPreview = {
       date: newDate,
       startDate: newDate.toISOString().split('T')[0],
       completedCount: data.c.length,
-      completed: data.c
+      completed: data.c,
+      plankRecord: parsedPlankRecord
     };
     render();
   } catch (e) {
@@ -1308,7 +1318,7 @@ const renderExerciseCard = (exercise, rule, index) => {
   }
 
   return `
-    <div class="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 overflow-hidden mb-6 group/card transition-all duration-300 hover:-translate-y-1 hover:shadow-lg" data-exercise-index="${index}">
+    <div class="bg-white dark:bg-slate-900 rounded-xl shadow-sm border border-gray-100 dark:border-slate-800 overflow-hidden mb-6 group/card transition-shadow duration-300 hover:shadow-lg" data-exercise-index="${index}">
       <div class="relative h-56 bg-gray-800 overflow-hidden">
         <video
           src="${exercise.videoUrls[currentVideoIndex]}"
@@ -1552,7 +1562,11 @@ const renderSyncModal = () => {
                 </button>
               </div>
               <div class="text-xs text-gray-500 dark:text-slate-400 mb-3">
-                ${state.syncPreview ? `Start: <strong>${state.syncPreview.startDate}</strong> • Ukończone dni: <strong>${state.syncPreview.completedCount}</strong>` : 'Brak podglądu — kliknij „Podgląd danych”.'}
+                ${
+                  state.syncPreview
+                    ? `Start: <strong>${state.syncPreview.startDate}</strong> • Ukończone dni: <strong>${state.syncPreview.completedCount}</strong> • Rekord deski: <strong>${state.syncPreview.plankRecord}s</strong>`
+                    : 'Brak podglądu — kliknij „Podgląd danych”.'
+                }
               </div>
               <p id="import-error" class="text-red-500 dark:text-red-400 text-xs mb-4"></p>
             `
