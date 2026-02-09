@@ -231,6 +231,7 @@ const state = {
   exerciseVideoIndex: {},
   syncTab: 'export',
   syncPreview: null,
+  importCode: '',
   notificationInterval: null,
   plankTimer: {
     time: 0,
@@ -675,14 +676,9 @@ const handleCopy = async () => {
 const handleImport = () => {
   const textarea = document.querySelector('#import-code');
   const error = document.querySelector('#import-error');
-  if (!textarea) return;
   if (error) error.textContent = '';
 
   try {
-    if (!textarea.value.trim()) {
-      if (error) error.textContent = 'Wklej kod przed załadowaniem.';
-      return;
-    }
     if (!state.syncPreview) {
       if (error) error.textContent = 'Najpierw wykonaj podgląd danych.';
       return;
@@ -690,6 +686,7 @@ const handleImport = () => {
 
     handleImportData(state.syncPreview.date, state.syncPreview.completed);
     state.syncPreview = null;
+    state.importCode = '';
     alert('Dane załadowane pomyślnie!');
   } catch (e) {
     if (error) error.textContent = 'Nieprawidłowy kod. Sprawdź czy skopiowałeś całość.';
@@ -697,18 +694,16 @@ const handleImport = () => {
 };
 
 const handlePreview = () => {
-  const textarea = document.querySelector('#import-code');
   const error = document.querySelector('#import-error');
-  if (!textarea) return;
   if (error) error.textContent = '';
 
   try {
-    if (!textarea.value.trim()) {
+    if (!state.importCode.trim()) {
       if (error) error.textContent = 'Wklej kod przed podglądem.';
       return;
     }
 
-    const jsonString = atob(textarea.value.trim());
+    const jsonString = atob(state.importCode.trim());
     const data = JSON.parse(jsonString);
 
     if (!data.s || !Array.isArray(data.c)) {
@@ -1549,7 +1544,7 @@ const renderSyncModal = () => {
             `
             : `
               <p class="text-sm text-gray-600 dark:text-slate-400 mb-3">Wklej kod wygenerowany na innym urządzeniu.<br/><span class="text-red-500 dark:text-red-400 text-xs font-bold">Uwaga: To nadpisze obecny postęp na tym urządzeniu!</span></p>
-              <textarea id="import-code" placeholder="Wklej kod tutaj..." class="w-full h-32 p-3 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-xs font-mono text-gray-900 dark:text-white resize-none focus:ring-2 focus:ring-primary focus:border-primary outline-none mb-4"></textarea>
+              <textarea id="import-code" placeholder="Wklej kod tutaj..." class="w-full h-32 p-3 bg-white dark:bg-slate-800 border border-gray-300 dark:border-slate-700 rounded-lg text-xs font-mono text-gray-900 dark:text-white resize-none focus:ring-2 focus:ring-primary focus:border-primary outline-none mb-4">${state.importCode}</textarea>
               <div class="flex gap-2 mb-3">
                 <button data-action="preview-sync" class="flex-1 bg-slate-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200 py-2 rounded-lg text-sm font-semibold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">Podgląd danych</button>
                 <button data-action="import-sync" ${state.syncPreview ? '' : 'disabled'} class="flex-1 bg-primary hover:bg-sky-600 text-white py-2 rounded-lg text-sm font-semibold shadow-md transition-colors disabled:opacity-50">
@@ -1800,6 +1795,7 @@ root.addEventListener('click', (event) => {
     case 'open-sync':
       state.isSyncModalOpen = true;
       state.syncPreview = null;
+      state.importCode = '';
       render();
       break;
     case 'open-settings':
@@ -1809,6 +1805,7 @@ root.addEventListener('click', (event) => {
     case 'close-sync':
       state.isSyncModalOpen = false;
       state.syncPreview = null;
+      state.importCode = '';
       render();
       break;
     case 'close-settings':
@@ -1979,6 +1976,7 @@ root.addEventListener('input', (event) => {
     updatePlankTimerUI();
   }
   if (target.id === 'import-code') {
+    state.importCode = target.value;
     state.syncPreview = null;
   }
 });
