@@ -883,6 +883,7 @@ const updatePlankTimerUI = () => {
     startButton.classList.add('bg-primary');
   }
 
+  if (window.lucide) window.lucide.createIcons();
 };
 
 const startPlankCountdown = () => {
@@ -894,7 +895,9 @@ const startPlankCountdown = () => {
     renderPlankCountdown();
     if (state.plankTimer.countdown === 0) {
       clearInterval(state.plankTimer.countdownInterval);
+      state.plankTimer.countdownInterval = null;
       state.plankTimer.countdown = null;
+      renderPlankCountdown();
       startPlankTimer();
     }
   }, 1000);
@@ -941,6 +944,25 @@ const resetPlankTimer = () => {
   renderPlankCountdown();
 };
 
+
+const ensureWorkoutVideosPlayable = () => {
+  const videos = document.querySelectorAll('[data-action="video-ended"]');
+  videos.forEach((video) => {
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+
+    const playPromise = video.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {
+        video.controls = true;
+      });
+    }
+  });
+};
+
 const render = () => {
   const previousScroll = window.scrollY;
   const shouldRestoreScroll = state.lastView === state.view;
@@ -959,6 +981,10 @@ const render = () => {
   }
 
   if (window.lucide) window.lucide.createIcons();
+
+  if (state.view === 'workout') {
+    ensureWorkoutVideosPlayable();
+  }
 
   if (state.pendingScrollTo !== undefined && state.view === 'workout') {
     const target = document.querySelector(`[data-exercise-index="${state.pendingScrollTo}"]`);
@@ -983,7 +1009,7 @@ const render = () => {
 };
 
 const renderOnboarding = () => `
-  <div class="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4 transition-colors duration-300">
+  <div class="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center safe-area-px py-4 transition-colors duration-300">
     <button
       data-action="toggle-theme"
       class="absolute top-4 right-4 p-2 rounded-full bg-white dark:bg-slate-800 text-gray-800 dark:text-yellow-300 shadow-md transition-colors"
@@ -1326,6 +1352,8 @@ const renderExerciseCard = (exercise, rule, index) => {
           autoplay
           muted
           playsinline
+          webkit-playsinline
+          preload="metadata"
           data-action="video-ended"
           data-exercise-id="${exercise.id}"
           class="w-full h-full object-cover opacity-90 group-hover/card:opacity-100 transition-opacity duration-300"
